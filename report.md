@@ -242,80 +242,80 @@ Per completezza, sono stati costruiti modelli MLP anche sul dataset trasformato 
 
 # Alberi di Decisione
 
-In questa sezione vengono analizzati:
-- **Alberi di Decisione** (con e senza pruning, con e senza PCA)
-- **Random Forest** come estensione ensemble degli alberi
-- A completamento del confronto, **SVM** con diversi kernel (lineare, RBF, polinomiale) per avere un punto di riferimento con modelli margine-based.
+In questa sezione vengono analizzati modelli di **Alberi di Decisione** con diverse configurazioni:
+- Bilanciamento delle classi tramite `class_weight` vs undersampling
+- Diversi livelli di pruning (`ccp_alpha`)
+- Con e senza PCA
 
 ## Alberi di Decisione senza PCA
 
-### Modello base (senza pruning)
+### Modello con class_weight e pruning moderato
 
-È stato addestrato un `DecisionTreeClassifier` con i parametri di default, specificando soltanto:
+È stato addestrato un `DecisionTreeClassifier` con i seguenti parametri:
 - `random_state = 42` per la riproducibilità
+- `class_weight = 'balanced'` per gestire lo sbilanciamento delle classi
+- `ccp_alpha = 0.001` per applicare un pruning moderato
 
 **Motivazioni:**
-- Il modello senza pruning fornisce un **baseline interpretativo**: consente di visualizzare l’albero completo e valutarne profondità e numero di foglie.
-- I parametri default di scikit-learn (criterio Gini, nessun limite esplicito alla profondità) permettono al modello di adattarsi completamente ai dati, spesso producendo **overfitting**, che però è utile come confronto estremo.
+- Il parametro `class_weight='balanced'` è fondamentale per affrontare lo sbilanciamento del dataset: assegna automaticamente pesi inversamente proporzionali alle frequenze delle classi, penalizzando maggiormente gli errori sulla classe minoritaria (diabete presente).
+- `ccp_alpha = 0.001` introduce un **cost-complexity pruning** moderato che riduce l'overfitting, eliminando i rami con guadagni di impurità molto piccoli.
+- Questo valore rappresenta un compromesso: rimuove split poco informativi senza semplificare eccessivamente l'albero.
+
+### Modello con dataset bilanciato (undersampling)
+
+Per confronto, è stato addestrato un `DecisionTreeClassifier` sul dataset bilanciato tramite undersampling:
+- `random_state = 42`
+- Nessun `class_weight` (non necessario su dataset già bilanciato)
+- Nessun `ccp_alpha` esplicito (parametri di default)
+
+**Motivazioni:**
+- L'undersampling elimina lo sbilanciamento a monte, permettendo all'albero di apprendere con uguale importanza da entrambe le classi.
+- L'assenza di parametri aggiuntivi permette di valutare se il dataset bilanciato è sufficiente a ottenere buone prestazioni.
+- Questo approccio serve come termine di confronto con il modello che usa `class_weight` sul dataset completo.
 
 I risultati vengono sintetizzati da:
 - Accuracy sul test set
-- Profondità dell’albero (`get_depth()`)
+- Profondità dell'albero (`get_depth()`)
 - Numero di foglie (`get_n_leaves()`)
 - Matrice di confusione e classification report
 
-Come atteso, l’albero completo tende a **overfittare** il training set, con una profondità elevata e un pattern decisionale complesso e poco generalizzabile.
+### Albero con pruning conservativo
 
-### Albero potato (con pruning)
-
-Per ridurre l’overfitting, è stato addestrato un `DecisionTreeClassifier` con parametro di complessità:
-- `ccp_alpha = 0.0001`
-
-**Motivazioni di `ccp_alpha`:**
-- `ccp_alpha` controlla il **cost-complexity pruning**: valori piccoli tagliano solo i rami meno rilevanti; valori troppo grandi semplificano eccessivamente l’albero.
-- Il valore 0.0001 è una scelta conservativa che bilancia la profondità e la capacità predittiva, riducendo il numero di foglie senza collassare l’albero.
-- La scelta è coerente con dataset di dimensione medio-grande: è sufficiente per eliminare rami con guadagni di impurità minimi dovuti al rumore.
-
-Il modello potato:
-- Riduce la profondità rispetto all’albero non potato.
-- Tende a migliorare la capacità di **generalizzazione** (accuratezza test più stabile, meno overfitting).
-- Mantiene comunque una buona interpretabilità grazie alla struttura ad albero.
-
-## Random Forest
-
-Per migliorare la stabilità e le prestazioni degli alberi singoli, è stato addestrato un `RandomForestClassifier` con i seguenti parametri:
-- `n_estimators = 100`
-- `class_weight = 'balanced'`
+Per ulteriormente esplorare l'effetto del pruning, è stato addestrato un `DecisionTreeClassifier` con:
 - `random_state = 42`
-- `n_jobs = -1` (uso di tutti i core disponibili)
+- `class_weight = 'balanced'`
+- `ccp_alpha = 0.0001` (pruning più conservativo, 10 volte più piccolo di 0.001)
 
-**Motivazioni dei parametri:**
-- `n_estimators = 100` è un valore standard che offre un buon equilibrio tra prestazioni e costo computazionale: oltre 100 alberi i guadagni marginali spesso sono contenuti.
-- `class_weight = 'balanced'` compensa lo sbilanciamento, aumentando il peso degli errori sulla classe positiva.
-- `n_jobs = -1` permette di sfruttare il parallelismo degli alberi per ridurre i tempi di training.
+**Motivazioni di `ccp_alpha = 0.0001`:**
+- Questo valore più piccolo permette un albero potenzialmente più profondo e complesso rispetto al caso con `ccp_alpha = 0.001`.
+- Elimina solo i rami con i guadagni di impurità davvero minimi dovuti al rumore.
+- Il confronto tra i due valori di `ccp_alpha` (0.001 vs 0.0001) permette di valutare il trade-off tra complessità del modello e capacità di generalizzazione.
+- `class_weight='balanced'` rimane attivo per gestire lo sbilanciamento delle classi.
 
-La Random Forest generalmente:
-- Migliora la **robustezza** rispetto al singolo albero,
-- Riduce la varianza del modello,
-- Fornisce metriche di importanza delle feature utilizzabili per ulteriori analisi.
+**Osservazioni generali:**
+- L'uso di `class_weight='balanced'` è cruciale per gestire lo sbilanciamento senza perdere informazione (come invece accade con l'undersampling).
+- Il pruning controllato tramite `ccp_alpha` riduce l'overfitting mantenendo una buona interpretabilità.
+- Gli alberi mantengono il vantaggio di essere facilmente visualizzabili e interpretabili, mostrando le regole decisionali esplicite.
 
 ## Alberi di Decisione con PCA
 
 Per valutare l’effetto della riduzione dimensionale sulla famiglia degli alberi, sono stati addestrati modelli sugli **score PCA** (`X_train_pca`, `X_test_pca`).
 
-### Albero senza pruning su PCA
+### Albero con pruning moderato su PCA
 
-- `DecisionTreeClassifier(random_state=42)` addestrato su `X_train_pca`.
-
-**Motivazione:**
-- Capire se, riducendo l’input alle componenti principali (potenzialmente meno rumorose), l’albero riesce a generalizzare meglio anche senza pruning esplicito.
-
-### Albero potato su PCA
-
-- `DecisionTreeClassifier(random_state=42, ccp_alpha=0.0001)` addestrato su `X_train_pca`.
+- `DecisionTreeClassifier(random_state=42, class_weight='balanced', ccp_alpha=0.001)` addestrato su `X_train_pca`.
 
 **Motivazione:**
-- Stessa logica di pruning del caso senza PCA, ma su feature meno ridondanti.
+- Applicare lo stesso approccio del modello senza PCA (class_weight + pruning moderato) alle componenti principali.
+- Valutare se la riduzione dimensionale combinata con il bilanciamento delle classi migliora le prestazioni.
+
+### Albero con pruning conservativo su PCA
+
+- `DecisionTreeClassifier(random_state=42, class_weight='balanced', ccp_alpha=0.0001)` addestrato su `X_train_pca`.
+
+**Motivazione:**
+- Stessa logica di pruning conservativo del caso senza PCA, ma sulle componenti PCA.
+- Confrontare l'effetto della PCA su alberi con diversi livelli di complessità.
 
 **Osservazioni qualitative generali:**
 - L’uso della PCA non porta a **miglioramenti sostanziali** nelle prestazioni degli alberi rispetto ai corrispettivi senza PCA, coerentemente con i risultati globali sull’analisi PCA.
@@ -404,15 +404,15 @@ In un contesto clinico, la scelta del modello dipende dal trade-off desiderato t
 
 ### Scenario 2: limitare i falsi allarmi (maggiore precision)
 
-- Modello consigliato: **MLP con Class Weights senza PCA** o **Random Forest con class_weight='balanced'**, calibrando la soglia decisionale.
-  - Entrambi permettono di modulare la soglia sulla probabilità predetta per aumentare la precision a scapito del recall.
-  - La Random Forest offre in più **importanza delle feature** e maggiore interpretabilità rispetto alla rete neurale.
+- Modello consigliato: **MLP con Class Weights senza PCA**, calibrando la soglia decisionale.
+  - Permette di modulare la soglia sulla probabilità predetta per aumentare la precision a scapito del recall.
+  - In alternativa, un **Decision Tree potato** offre maggiore interpretabilità pur mantenendo buone performance.
 
 ### Scenario 3: massima interpretabilità del modello
 
-- Modello consigliato: **Decision Tree potato** (con pruning) o **Random Forest** (come compromesso tra interpretabilità e performance).
-  - L’albero potato è più leggibile: è possibile tracciare esplicitamente regole del tipo "se BMI > soglia e fumo = sì allora...".
-  - La Random Forest è meno interpretabile a livello di singola istanza, ma fornisce **feature importance** globali.
+- Modello consigliato: **Decision Tree potato** (con pruning).
+  - L'albero potato è più leggibile: è possibile tracciare esplicitamente regole del tipo "se BMI > soglia e fumo = sì allora...".
+  - Il bilanciamento delle classi tramite `class_weight` garantisce che il modello non ignori la classe minoritaria.
 
 ## Ruolo della PCA nel progetto
 
@@ -427,6 +427,6 @@ Nel complesso, il lavoro mostra come, partendo da un dataset fortemente sbilanci
 - **Standardizzare** le feature,
 - **Gestire esplicitamente lo sbilanciamento** (tramite undersampling, class weights, o Focal Loss),
 - **Valutare attentamente il ruolo della PCA**, tenendo conto sia della varianza spiegata sia della perdita di interpretabilità,
-- **Scegliere il modello** (rete neurale, albero, Random Forest, SVM) in base al trade-off desiderato tra recall, precisione e interpretabilità.
+- **Scegliere il modello** (rete neurale o albero di decisione) in base al trade-off desiderato tra recall, precisione e interpretabilità.
 
-Tra i modelli testati, una **rete neurale MLP con Class Weights sul dataset standardizzato e completo (senza PCA)** emerge come soluzione particolarmente efficace quando la priorità è identificare il maggior numero possibile di pazienti a rischio di diabete, mentre una **Random Forest bilanciata** rappresenta un’ottima alternativa quando si desidera un compromesso tra performance, robustezza e capacità di spiegazione del modello.
+Tra i modelli testati, una **rete neurale MLP con Class Weights sul dataset standardizzato e completo (senza PCA)** emerge come soluzione particolarmente efficace quando la priorità è identificare il maggior numero possibile di pazienti a rischio di diabete, mentre un **Decision Tree bilanciato e potato** rappresenta un'ottima alternativa quando si desidera massima interpretabilità del modello.
