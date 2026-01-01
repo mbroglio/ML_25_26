@@ -310,128 +310,154 @@ Input (14 PCA components) → Dense(32, ReLU) → Dropout(0.3)
 
 ## Decision Tree
 
-### Parametri Generali
+### Metodologia: Grid Search con Cross-Validation
 
-#### Random State (42)
+A differenza degli approcci manuali precedenti, gli alberi di decisione sono stati ottimizzati tramite **Grid Search con 5-Fold Cross-Validation**, permettendo la selezione automatica degli iperparametri ottimali.
+
+#### Griglia di Parametri
 ```python
-DecisionTreeClassifier(random_state=42)
+dt_param_grid = {
+    'max_depth': [5, 10, 15, 20, None],
+    'min_samples_split': [2, 5, 10, 20],
+    'min_samples_leaf': [1, 2, 5, 10],
+    'criterion': ['gini', 'entropy'],
+    'ccp_alpha': [0, 0.0001, 0.0005, 0.001, 0.005, 0.01]
+}
 ```
-- **Riproducibilità**: Risultati consistenti tra esecuzioni
-- **Comparabilità**: Necessario per confronto equo tra configurazioni
 
-### Decision Tree senza Pruning
+#### Giustificazione dei Parametri Testati
 
-#### Configurazione Base
+**1. max_depth (Profondità massima)**
+- **Range [5, 10, 15, 20, None]**: Da albero semplice a crescita illimitata
+- **5-10**: Modelli semplici, alta interpretabilità, possibile underfitting
+- **15-20**: Compromesso complessità/generalizzazione
+- **None**: Crescita completa, rischio overfitting ma utile come riferimento
+
+**2. min_samples_split (Campioni minimi per split)**
+- **Range [2, 5, 10, 20]**: Controllo granularità degli split
+- **2 (default)**: Split anche con 2 campioni
+- **10-20**: Previene split su sottoinsiemi troppo piccoli, riduce overfitting
+
+**3. min_samples_leaf (Campioni minimi per foglia)**
+- **Range [1, 2, 5, 10]**: Evita foglie con pochi esempi
+- **1 (default)**: Foglie pure possibili
+- **5-10**: Foglie più robuste statisticamente
+
+**4. criterion (Criterio di split)**
+- **gini**: Misura impurità, computazionalmente efficiente
+- **entropy**: Information gain, teoricamente più "puro"
+- **Differenza pratica**: Minima, ma testati entrambi
+
+**5. ccp_alpha (Cost-Complexity Pruning)**
+- **Range [0, 0.0001, 0.0005, 0.001, 0.005, 0.01]**
+- **0**: Nessun pruning post-training
+- **0.0001-0.001**: Pruning moderato
+- **0.005-0.01**: Pruning aggressivo
+
+#### Metrica di Ottimizzazione: F1-Score
+
+**Giustificazione**:
+- **Formula**: $F1 = 2 \times \frac{Precision \times Recall}{Precision + Recall}$
+- **Vantaggi per dataset sbilanciato**:
+  - Non dominata dalla classe maggioritaria (come accuracy)
+  - Bilancia precision e recall
+  - Penalizza modelli che predicono sempre classe 0
+- **Alternative considerate**:
+  - Recall puro: Favorisce troppi falsi positivi
+  - Precision pura: Favorisce troppi falsi negativi
+  - Accuracy: Inadatta per 86/14 split
+
+### Funzione di Grid Search
+
 ```python
-DecisionTreeClassifier(
-    random_state=42,
-    class_weight='balanced'
+def run_grid_search(X_train, y_train, param_grid, class_weight="balanced", cv=5, scoring="f1"):
+    base_model = DecisionTreeClassifier(random_state=42, class_weight=class_weight)
+    
+    grid_search = GridSearchCV(
+        estimator=base_model,
+        param_grid=param_grid,
+        cv=cv,
+        scoring=scoring,
+        n_jobs=-1,
+        verbose=1,
+        return_train_score=True
+    )
+    
+    grid_search.fit(X_train, y_train)
+    return grid_search.best_estimator_, grid_search
+```
+
+**Parametri chiave**:
+- **cv=5**: 5-Fold Cross-Validation per stima robusta
+- **scoring="f1"**: Ottimizza F1-score
+- **n_jobs=-1**: Parallelizzazione su tutti i core
+- **return_train_score=True**: Monitora overfitting
+
+### Configurazioni Testate
+
+#### 1. Dataset Standard con Class Weights
+```python
+dt_best, grid_results = run_grid_search(
+    X_train, y_train,
+    dt_param_grid,
+    class_weight="balanced",
+    scoring="f1"
 )
 ```
 
-#### Giustificazione
+**Caratteristiche**:
+- Dataset completo (~70k campioni)
+- Class weight bilanciato per gestire sbilanciamento
+- Selezione automatica iperparametri ottimali
 
-**1. Class Weight Balanced**
-- **Stessa motivazione delle NN**: Compensa sbilanciamento 86/14
-- **Effetto**: Split favoriscono riduzione impurità su classe minoritaria
-- **Formula Gini pesata**: 
-$$Gini = \sum_{i=1}^{C} w_i \times p_i \times (1 - p_i)$$
-
-**2. Assenza di max_depth**
-- **Crescita completa**: Albero si espande fino a foglie pure o min_samples_leaf
-- **Risultato**: Profondità ~40-50, ~15,000 foglie
-- **Overfitting**: Garantito sul training set, ma utile come baseline
-
-**3. Min_samples_split (default=2)**
-- **Permissivo**: Split anche con 2 esempi
-- **Giustificazione**: Vogliamo vedere capacità massima prima del pruning
-
-**4. Min_samples_leaf (default=1)**
-- **Foglie pure**: Possibili anche con 1 esempio
-- **Overfitting intenzionale**: Stabilisce limite superiore di complessità
-
-### Decision Tree con Pruning (Cost-Complexity)
-
-#### Configurazione
+#### 2. Dataset Bilanciato (Undersampling)
 ```python
-DecisionTreeClassifier(
-    random_state=42,
-    class_weight='balanced',
-    ccp_alpha=0.0001
+dt_best_bal, grid_results_bal = run_grid_search(
+    X_train_bal, y_train_bal,
+    dt_param_grid,
+    class_weight=None,  # Non necessario
+    scoring="f1"
 )
 ```
 
-#### Giustificazione di ccp_alpha
+**Caratteristiche**:
+- Dataset bilanciato 50/50 (~35k campioni)
+- Nessun class weight necessario
+- Grid Search più veloce su dataset ridotto
 
-**1. Cost-Complexity Pruning**
-- **Formula**: $R_\alpha(T) = R(T) + \alpha \times |T|$
-  - $R(T)$ = errore del subtree T
-  - $|T|$ = numero di foglie
-  - $\alpha$ = parametro di complessità
-
-**2. Scelta di α = 0.0001**
-- **Valore piccolo**: Pruning moderato, rimuove solo rami poco informativi
-- **Risultato**: Riduce profondità da ~45 a ~25-30
-- **Bilanciamento**: 
-  - α troppo piccolo (0.00001): Pruning trascurabile
-  - α troppo grande (0.01): Albero eccessivamente semplificato
-  - **0.0001**: Sweet spot identificato empiricamente
-
-**3. Effetto sul modello**:
-- **Foglie**: Da ~15,000 a ~3,000-5,000
-- **Generalizzazione**: Migliora significativamente su test set
-- **Interpretabilità**: Albero visualizzabile (depth 3-4 per plot)
-
-### Variante con Undersampling
-
-#### Configurazione Identica
+#### 3. Dataset con PCA
 ```python
-DecisionTreeClassifier(random_state=42)
-dt_no_pruning_bal.fit(X_train_bal, y_train_bal)
-```
-
-#### Giustificazione
-
-**1. Rimozione class_weight**
-- **Dataset già bilanciato**: 50/50, non serve pesatura
-- **Crescita naturale**: Split basati su impurità non pesata
-
-**2. Stessi altri parametri**:
-- **ccp_alpha**: 0.0001 per versione pruned
-- **Motivazione**: Dataset più piccolo (35k vs 70k) ma stesso rischio overfitting
-
-**3. Aspettative**:
-- **Albero più semplice**: Meno esempi → meno split necessari
-- **Profondità minore**: ~30-35 vs ~45
-- **Bias diverso**: Equilibrato tra le classi
-
-### Decision Tree con PCA
-
-#### Configurazione
-```python
-DecisionTreeClassifier(
-    random_state=42,
-    class_weight='balanced',
-    ccp_alpha=0.001  # Valore maggiore!
+dt_pca_best, grid_results_pca = run_grid_search(
+    X_train_pca, y_train_pca,
+    dt_param_grid,
+    class_weight="balanced",
+    scoring="f1"
 )
-dt_pca.fit(X_train_pca, y_train_pca)
 ```
 
-#### Giustificazione Modifiche
+**Caratteristiche**:
+- 14 componenti PCA
+- Class weight bilanciato
+- Valuta effetto riduzione dimensionale
 
-**1. ccp_alpha aumentato (0.001 vs 0.0001)**
-- **Motivazione**: PCA components sono combinazioni lineari → meno interpretabili
-- **Pruning più aggressivo**: Previene split su componenti poco significative
-- **Trade-off**: Sacrifica un po' di accuratezza per generalizzazione
+### Riepilogo Risultati Grid Search
 
-**2. Class Weight mantenuto**:
-- **Dataset non bilanciato**: Ancora 70k esempi con 86/14
-- **PCA preserva distribuzione**: Riduce dimensioni, non bilancia classi
-
-**3. Aspettative**:
-- **Albero più compatto**: 14 features vs 21 → meno split possibili
-- **Split su PCA1-3**: Componenti principali dominano le decisioni
-- **Interpretabilità ridotta**: PCA features non hanno significato clinico diretto
+```python
+results_summary = pd.DataFrame({
+    'Configurazione': [
+        'No PCA - Standard Dataset',
+        'No PCA - Balanced Dataset', 
+        'PCA - Standard Dataset'
+    ],
+    'Best F1 (CV)': [
+        grid_results.best_score_,
+        grid_results_bal.best_score_,
+        grid_results_pca.best_score_
+    ],
+    'Test Accuracy': [...],
+    'Tree Depth': [...]
+})
+```
 
 ### Visualizzazione degli Alberi
 
@@ -441,7 +467,7 @@ plot_tree(tree, max_depth=4, ...)
 ```
 
 **Giustificazione**:
-- **Profondità reale**: 25-45 livelli → impossibile visualizzare
+- **Profondità reale**: Può variare in base agli iperparametri ottimali
 - **Depth 4**: Mostra primi 4 livelli decisionali (più importanti)
 - **16-31 foglie visibili**: Cattura pattern principali
 - **Interpretabilità**: Clinici possono seguire logica decisionale
@@ -475,15 +501,15 @@ plot_tree(tree, feature_names=numeric_features, ...)
 | Class Weights PCA | ~0.85 | ~0.28 | 0.84 | Molto Basso | Altissimo | Max sensibilità |
 | Focal Loss | ~0.75 | ~0.32 | 0.83 | Medio-Basso | Alto | Non giustifica costo |
 
-### Risultati Decision Tree
+### Risultati Decision Tree (Grid Search)
 
-| Modello | Recall(1) | Precision(1) | Accuracy | Interpretabilità |
-|---------|-----------|--------------|----------|------------------|
-| No Pruning No PCA | ~0.75 | ~0.33 | ~0.73 | Bassa (depth ~45) |
-| Pruned No PCA | ~0.72 | ~0.35 | ~0.75 | Media (depth ~25) |
-| No Pruning Balanced | ~0.78 | ~0.75 | ~0.76 | Bassa |
-| Pruned Balanced | ~0.76 | ~0.77 | ~0.77 | Alta |
-| PCA Pruned | ~0.70 | ~0.32 | ~0.74 | Media-Alta |
+| Configurazione | Best F1 (CV) | Test Accuracy | Tree Depth | Interpretabilità |
+|----------------|--------------|---------------|------------|------------------|
+| No PCA - Standard Dataset | Ottimizzato via CV | Variabile | Variabile | Media-Alta |
+| No PCA - Balanced Dataset | Ottimizzato via CV | Variabile | Variabile | Alta |
+| PCA - Standard Dataset | Ottimizzato via CV | Variabile | Variabile | Bassa |
+
+**Note**: I valori esatti dipendono dai risultati del Grid Search. La configurazione ottimale viene selezionata automaticamente massimizzando l'F1-score.
 
 ### Raccomandazioni Finali
 
@@ -501,11 +527,11 @@ plot_tree(tree, feature_names=numeric_features, ...)
 - **Più veloce**: 14 features vs 21 in inference
 
 #### Per Interpretabilità Clinica
-**Modello raccomandato**: Decision Tree Pruned su Dataset Balanced
-- **Recall 0.76**: Buona sensibilità
-- **Precision 0.77**: Equilibrato
+**Modello raccomandato**: Decision Tree ottimizzato con Grid Search su Dataset Balanced
+- **F1-score ottimizzato**: Iperparametri selezionati automaticamente
 - **Interpretabile**: Medici possono seguire logica decisionale
 - **Validabile**: Regole esplicitabili
+- **Riproducibile**: Grid Search garantisce selezione sistematica
 
 #### PCA: Quando Utilizzarla?
 **Conclusione**: In questo progetto, **PCA offre benefici limitati**

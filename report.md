@@ -242,54 +242,144 @@ Per completezza, sono stati costruiti modelli MLP anche sul dataset trasformato 
 
 # Alberi di Decisione
 
-In questa sezione vengono analizzati modelli di **Alberi di Decisione** con diverse configurazioni:
-- Bilanciamento delle classi tramite `class_weight` vs undersampling
-- Diversi livelli di pruning (`ccp_alpha`)
+In questa sezione vengono analizzati modelli di **Alberi di Decisione** ottimizzati tramite **Grid Search con 5-Fold Cross-Validation**. L'ottimizzazione automatica degli iperparametri permette di trovare la configurazione migliore per ciascuno scenario:
+- Dataset standard con `class_weight='balanced'`
+- Dataset bilanciato tramite undersampling
 - Con e senza PCA
+
+## Metodologia: Grid Search con Cross-Validation
+
+È stato implementato un approccio sistematico per la selezione degli iperparametri tramite **Grid Search con 5-Fold Cross-Validation**, ottimizzando l'**F1-score** come metrica principale.
+
+### Griglia di parametri testati
+
+```python
+dt_param_grid = {
+    'max_depth': [5, 10, 15, 20, None],
+    'min_samples_split': [2, 5, 10, 20],
+    'min_samples_leaf': [1, 2, 5, 10],
+    'criterion': ['gini', 'entropy'],
+    'ccp_alpha': [0, 0.0001, 0.0005, 0.001, 0.005, 0.01]
+}
+```
+
+**Motivazioni della scelta dei parametri:**
+
+- **`max_depth`**: Limita la profondità massima dell'albero per evitare overfitting. Valori da 5 (albero molto semplice) a `None` (crescita illimitata).
+- **`min_samples_split`**: Numero minimo di campioni per dividere un nodo interno. Valori più alti prevengono split su sottoinsiemi troppo piccoli.
+- **`min_samples_leaf`**: Numero minimo di campioni in una foglia. Impedisce la creazione di foglie con pochi esempi.
+- **`criterion`**: Funzione per misurare la qualità degli split (`gini` vs `entropy`). Entrambe sono valide per classificazione binaria.
+- **`ccp_alpha`**: Parametro di cost-complexity pruning. Valori da 0 (nessun pruning) a 0.01 (pruning aggressivo).
+
+**Scelta della metrica F1-score:**
+- L'F1-score è la media armonica di precision e recall, particolarmente appropriata per dataset sbilanciati.
+- A differenza dell'accuracy, non viene dominata dalla classe maggioritaria.
+- Bilancia la capacità di identificare i positivi (recall) con la precisione delle predizioni positive.
 
 ## Alberi di Decisione senza PCA
 
-### Modello con class_weight e pruning moderato
+### Dataset Standard con Class Weights
 
-È stato addestrato un `DecisionTreeClassifier` con i seguenti parametri:
-- `random_state = 42` per la riproducibilità
-- `class_weight = 'balanced'` per gestire lo sbilanciamento delle classi
-- `ccp_alpha = 0.001` per applicare un pruning moderato
+Il Grid Search è stato eseguito sul dataset completo (70k campioni) con `class_weight='balanced'` per gestire lo sbilanciamento.
 
-**Motivazioni:**
-- Il parametro `class_weight='balanced'` è fondamentale per affrontare lo sbilanciamento del dataset: assegna automaticamente pesi inversamente proporzionali alle frequenze delle classi, penalizzando maggiormente gli errori sulla classe minoritaria (diabete presente).
-- `ccp_alpha = 0.001` introduce un **cost-complexity pruning** moderato che riduce l'overfitting, eliminando i rami con guadagni di impurità molto piccoli.
-- Questo valore rappresenta un compromesso: rimuove split poco informativi senza semplificare eccessivamente l'albero.
-
-### Modello con dataset bilanciato (undersampling)
-
-Per confronto, è stato addestrato un `DecisionTreeClassifier` sul dataset bilanciato tramite undersampling:
-- `random_state = 42`
-- Nessun `class_weight` (non necessario su dataset già bilanciato)
-- Nessun `ccp_alpha` esplicito (parametri di default)
+**Configurazione:**
+- Training set: `X_train`, `y_train`
+- Class weight: `'balanced'` (pesi inversamente proporzionali alle frequenze delle classi)
+- Cross-validation: 5 fold
+- Metrica ottimizzata: F1-score
 
 **Motivazioni:**
-- L'undersampling elimina lo sbilanciamento a monte, permettendo all'albero di apprendere con uguale importanza da entrambe le classi.
-- L'assenza di parametri aggiuntivi permette di valutare se il dataset bilanciato è sufficiente a ottenere buone prestazioni.
-- Questo approccio serve come termine di confronto con il modello che usa `class_weight` sul dataset completo.
+- Il `class_weight='balanced'` penalizza maggiormente gli errori sulla classe minoritaria.
+- La 5-Fold CV garantisce una stima robusta delle performance, riducendo la varianza dovuta alla scelta del validation set.
+- L'F1-score bilancia recall e precision, evitando di privilegiare eccessivamente una delle due.
 
-I risultati vengono sintetizzati da:
-- Accuracy sul test set
-- Profondità dell'albero (`get_depth()`)
-- Numero di foglie (`get_n_leaves()`)
-- Matrice di confusione e classification report
+### Dataset Bilanciato (Undersampling)
 
-### Albero con pruning conservativo
+Il Grid Search è stato ripetuto sul dataset bilanciato tramite undersampling, senza `class_weight` poiché le classi sono già equilibrate.
 
-Per ulteriormente esplorare l'effetto del pruning, è stato addestrato un `DecisionTreeClassifier` con:
-- `random_state = 42`
-- `class_weight = 'balanced'`
-- `ccp_alpha = 0.0001` (pruning più conservativo, 10 volte più piccolo di 0.001)
+**Configurazione:**
+- Training set: `X_train_bal`, `y_train_bal` (dataset con undersampling)
+- Class weight: `None` (non necessario su dataset bilanciato)
+- Cross-validation: 5 fold
+- Metrica ottimizzata: F1-score
 
-**Motivazioni di `ccp_alpha = 0.0001`:**
-- Questo valore più piccolo permette un albero potenzialmente più profondo e complesso rispetto al caso con `ccp_alpha = 0.001`.
-- Elimina solo i rami con i guadagni di impurità davvero minimi dovuti al rumore.
-- Il confronto tra i due valori di `ccp_alpha` (0.001 vs 0.0001) permette di valutare il trade-off tra complessità del modello e capacità di generalizzazione.
+**Motivazioni:**
+- Con dataset bilanciato 50/50, non è necessario applicare pesi alle classi.
+- Permette di confrontare l'effetto dell'undersampling rispetto al class weighting.
+- Il dataset ridotto (~35k campioni) velocizza significativamente il Grid Search.
+
+## Alberi di Decisione con PCA
+
+Per valutare l'effetto della riduzione dimensionale, il Grid Search è stato applicato anche ai dati trasformati tramite PCA.
+
+**Configurazione:**
+- Training set: `X_train_pca`, `y_train_pca` (14 componenti principali)
+- Class weight: `'balanced'`
+- Cross-validation: 5 fold
+- Metrica ottimizzata: F1-score
+
+**Motivazioni:**
+- Confrontare le performance degli alberi su feature originali vs componenti PCA.
+- Verificare se la riduzione dimensionale porta vantaggi in termini di generalizzazione.
+
+**Osservazioni:**
+- L'uso della PCA non porta a **miglioramenti sostanziali** nelle prestazioni degli alberi.
+- La perdita di interpretabilità (componenti PCA al posto di feature cliniche) riduce uno dei principali vantaggi dei modelli ad albero.
+
+## Visualizzazione e Interpretazione
+
+Gli alberi di decisione offrono il vantaggio unico dell'**interpretabilità**. Per ciascun modello ottimizzato, viene visualizzato l'albero fino a una profondità massima di 4 livelli.
+
+**Funzioni di supporto implementate:**
+- `show_tree_metrics`: Calcola accuracy, profondità, numero di foglie, matrice di confusione e classification report.
+- `print_tree`: Visualizza l'albero con feature names per interpretazione clinica.
+- `run_grid_search`: Esegue Grid Search con CV e restituisce il modello migliore.
+
+## Riepilogo dei Risultati Grid Search
+
+I risultati delle tre configurazioni vengono confrontati in un DataFrame riepilogativo che include:
+- **Configurazione**: Nome della configurazione (No PCA Standard, No PCA Balanced, PCA Standard)
+- **Best F1 (CV)**: Miglior F1-score medio ottenuto durante la cross-validation
+- **Test Accuracy**: Accuratezza sul test set con i migliori parametri
+- **Tree Depth**: Profondità dell'albero ottimale
+
+Questo confronto sistematico permette di identificare la configurazione migliore per ciascuno scenario applicativo.
+
+---
+
+# Conclusioni
+
+## Sintesi dei risultati principali
+
+1. **Analisi Esplorativa e PCA**
+   - Il dataset presenta un **forte sbilanciamento** tra classe negativa e positiva.
+   - Le feature risultano **debolmente correlate** fra loro; non esistono gruppi chiari di variabili ridondanti.
+   - La PCA richiede **14 componenti su 21** per spiegare ~80% della varianza, indicando che la riduzione dimensionale è limitata e comporta una perdita di interpretabilità.
+
+2. **Reti Neurali**
+   - Il modello MLP di base (21 feature standardizzate, 3 hidden layer 128-64-32, dropout 0.3, Adam, 150 epoche, batch 256) fornisce una buona **ROC-AUC (>0.8)** ma è ancora sbilanciato verso la classe negativa (troppi falsi negativi).
+   - L'**undersampling** produce un modello più equilibrato, con recall più alto sulla classe positiva ma perdita di informazione sulla classe negativa.
+   - L'uso di **Class Weights** sul dataset completo riesce a mantenere tutti i dati e a ottenere un **recall dei positivi elevato (~0.78)**, accettando una precision più bassa (~0.31) e qualche oscillazione nelle curve di validazione.
+   - La **Focal Loss** offre un miglioramento marginale, ma a fronte di un **maggiore costo computazionale** e complessità.
+   - L'uso della **PCA** nelle reti neurali non porta vantaggi netti: la combinazione `PCA + Class Weights` può essere utile solo se si accetta una forte priorità al recall dei positivi rispetto a precision e accuratezza globale.
+
+3. **Alberi di Decisione con Grid Search**
+   - L'ottimizzazione tramite **Grid Search con 5-Fold Cross-Validation** permette di trovare automaticamente i migliori iperparametri.
+   - La metrica **F1-score** è stata scelta per bilanciare precision e recall su dataset sbilanciato.
+   - I parametri ottimizzati includono: `max_depth`, `min_samples_split`, `min_samples_leaf`, `criterion` e `ccp_alpha`.
+   - Il confronto tra **dataset standard con class weights** e **dataset bilanciato** mostra trade-off diversi.
+   - L'uso della PCA con gli alberi non offre guadagni sostanziali e riduce l'interpretabilità.
+
+## Modello/i raccomandati in base allo scenario
+
+In un contesto clinico, la scelta del modello dipende dal trade-off desiderato tra:
+- **Minimizzazione dei falsi negativi** (non perdere pazienti malati),
+- **Controllo dei falsi positivi** (evitare troppi allarmi inutili),
+- **Interpretabilità** del modello.
+
+### Scenario 1: massima attenzione ai positivi (minimizzare i falsi negativi)
+
+- Modello consigliato: **MLP con Class Weights**, senza PCA.
 - `class_weight='balanced'` rimane attivo per gestire lo sbilanciamento delle classi.
 
 **Osservazioni generali:**
@@ -377,15 +467,12 @@ Le SVM sono state utilizzate come ulteriore riferimento, con diversi kernel.
    - La **Focal Loss** offre un miglioramento marginale, ma a fronte di un **maggiore costo computazionale** e complessità.
    - L’uso della **PCA** nelle reti neurali non porta vantaggi netti: la combinazione `PCA + Class Weights` può essere utile solo se si accetta una forte priorità al recall dei positivi rispetto a precision e accuratezza globale.
 
-3. **Alberi di Decisione e Random Forest**
-   - Gli **alberi senza pruning** mostrano overfitting, con profondità elevate e struttura complessa.
-   - Il **pruning (ccp_alpha=0.0001)** semplifica l’albero, migliorando la generalizzazione a costo di una leggera riduzione di accuratezza sul training.
-   - La **Random Forest (n_estimators=100, class_weight='balanced')** fornisce un buon compromesso tra prestazioni, robustezza e capacità di gestione dello sbilanciamento.
-   - L’uso della PCA con gli alberi non offre guadagni sostanziali e riduce l’interpretabilità.
-
-4. **SVM**
-   - Le SVM con kernel lineare, RBF e polinomiale confermano l’importanza della **standardizzazione** e della **gestione dello sbilanciamento** (sottoinsieme di training, class weights).
-   - Per motivi computazionali, è stato necessario usare un sottoinsieme del training set per i kernel non lineari.
+3. **Alberi di Decisione con Grid Search**
+   - L'ottimizzazione tramite **Grid Search con 5-Fold Cross-Validation** permette di trovare automaticamente i migliori iperparametri.
+   - La metrica **F1-score** è stata scelta per bilanciare precision e recall su dataset sbilanciato.
+   - I parametri ottimizzati includono: `max_depth`, `min_samples_split`, `min_samples_leaf`, `criterion` e `ccp_alpha`.
+   - Il confronto tra **dataset standard con class weights** e **dataset bilanciato** mostra trade-off diversi.
+   - L'uso della PCA con gli alberi non offre guadagni sostanziali e riduce l'interpretabilità.
 
 ## Modello/i raccomandati in base allo scenario
 
