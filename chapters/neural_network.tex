@@ -1,0 +1,226 @@
+% Capitolo standalone: Reti Neurali
+% (Non include preambolo né \documentclass; pensato per essere \input{} o \include{} nel main.)
+
+\chapter{Reti Neurali}
+\label{chap:neural-networks}
+
+\section{Obiettivo e contesto}
+L'obiettivo delle reti neurali è modellare relazioni potenzialmente non lineari tra gli indicatori di salute e la variabile target binaria \texttt{Diabetes\_binary}.
+Il dataset presenta un forte sbilanciamento di classe (classe negativa maggioritaria), tipico di problemi di screening: di conseguenza, oltre all'accuratezza complessiva, diventano centrali metriche come \emph{recall} della classe positiva e la capacità di separazione misurata tramite ROC--AUC.
+
+\section{Preprocessing e preparazione dei dati}
+\subsection{Standardizzazione delle feature (\texttt{StandardScaler})}
+Tutte le feature numeriche vengono standardizzate (media 0, varianza 1).
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item le reti neurali ottimizzate con metodi di discesa del gradiente sono sensibili alla scala delle feature: feature su scale molto diverse possono dominare il gradiente e rallentare/instabilizzare la convergenza;
+  \item la standardizzazione rende più omogeneo il paesaggio della loss, facilitando l'ottimizzazione con Adam;
+  \item è un prerequisito naturale per confronti con PCA, che è intrinsecamente sensibile alla scala.
+\end{itemize}
+
+\subsection{Suddivisione train/test}
+Si adotta una suddivisione train/test 70/30 (\texttt{test\_size=0.3}) con \texttt{random\_state=42}.
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item 70/30 è un compromesso comune: mantiene un training set ampio per stimare i parametri e un test set abbastanza grande per una stima robusta delle metriche;
+  \item fissare il seme casuale rende l'esperimento riproducibile.
+\end{itemize}
+
+\section{Scelte di valutazione e parametri operativi}
+\subsection{Soglia di classificazione (\texttt{threshold=0.5})}
+Le reti producono una probabilità $\hat{p}(y=1\mid x)$ tramite attivazione sigmoide.
+La conversione in label predetta avviene con soglia $t=0.5$.
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item $t=0.5$ è la scelta standard quando la probabilità è calibrata e i costi di errore sono simmetrici;
+  \item in contesto clinico i costi non sono simmetrici (i falsi negativi sono più gravi): mantenere $t=0.5$ come baseline permette un confronto equo tra configurazioni; eventualmente $t$ può essere ottimizzata per massimizzare recall o F$_\beta$ in una fase successiva.
+\end{itemize}
+
+\subsection{Metriche e diagnostica}
+Per ogni modello vengono analizzati:
+\begin{itemize}
+  \item matrice di confusione e \texttt{classification\_report} (precision/recall/F1), per capire il compromesso tra falsi positivi e falsi negativi;
+  \item curva ROC e area sotto la curva (ROC--AUC), per valutare la separabilità delle classi indipendentemente dalla soglia;
+  \item curve di training/validation (loss e accuracy), per diagnosticare overfitting/underfitting.
+\end{itemize}
+\textbf{Giustificazione:} in presenza di sbilanciamento, l'accuratezza da sola può essere fuorviante (un modello che predice sempre la classe maggioritaria può avere accuracy elevata ma recall pessimo per la classe positiva).
+
+\section{Architettura di base (No PCA, dataset originale)}
+\subsection{Struttura}
+La rete neurale baseline è una MLP (Multi-Layer Perceptron) fully-connected:
+\begin{center}
+\texttt{Input (21)} $\rightarrow$ \texttt{Dense(128, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(64, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(32, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(1, Sigmoid)}
+\end{center}
+
+\subsection{Numero di neuroni: 128 $\rightarrow$ 64 $\rightarrow$ 32}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item una struttura decrescente implementa una compressione progressiva: i primi layer apprendono combinazioni non lineari delle feature, mentre gli ultimi sintetizzano tali rappresentazioni verso una decisione binaria;
+  \item 128 neuroni nel primo layer sono sufficienti per modellare interazioni tra 21 feature senza introdurre complessità eccessiva;
+  \item la riduzione graduale (128$\to$64$\to$32) evita colli di bottiglia troppo bruschi (che potrebbero perdere informazione) e limita il numero di parametri, riducendo il rischio di overfitting.
+\end{itemize}
+
+\subsection{Attivazione ReLU nei layer nascosti}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item ReLU è lo standard per MLP moderne grazie a efficienza computazionale e gradiente non saturante per input positivi;
+  \item riduce il problema del \emph{vanishing gradient} rispetto a sigmoide/tanh nei layer nascosti;
+  \item in assenza di evidenze di ``dead ReLU'' rilevanti su questo task, non è stato necessario introdurre varianti (LeakyReLU/ELU), mantenendo il modello più semplice e interpretabile.
+\end{itemize}
+
+\subsection{Dropout: $p=0.3$ dopo ogni layer}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item il dropout introduce regolarizzazione stocastica, forzando la rete a non dipendere eccessivamente da subset specifici di neuroni;
+  \item con dataset sbilanciato, la rete può overfittare pattern fortemente correlati alla classe maggioritaria; il dropout mitiga questo rischio;
+  \item $p=0.3$ è un valore moderato: abbastanza alto da regolarizzare, ma non così aggressivo da impedire l'apprendimento.
+\end{itemize}
+
+\subsection{Output sigmoide}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item un singolo neurone con sigmoide produce $\hat{p}(y=1\mid x)\in(0,1)$, interpretabile come probabilità;
+  \item è la scelta naturale per classificazione binaria e si combina direttamente con la loss di cross-entropia binaria.
+\end{itemize}
+
+\subsection{Loss: Binary Cross-Entropy}
+Con $y\in\{0,1\}$ e probabilità predetta $\hat{p}$:
+\begin{equation}
+\mathcal{L}_{BCE}(y,\hat{p}) = -\big(y\log \hat{p} + (1-y)\log(1-\hat{p})\big).
+\end{equation}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item è la loss standard per massima verosimiglianza in classificazione binaria (Bernoulli);
+  \item penalizza in modo consistente predizioni molto confidenti ma errate, utile in contesti a rischio clinico.
+\end{itemize}
+
+\subsection{Ottimizzatore: Adam}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item Adam usa stime adattive di primo e secondo momento del gradiente, riducendo la necessità di tuning manuale del learning rate;
+  \item è robusto su problemi non lineari con feature standardizzate e dimensione campionaria medio-grande;
+  \item rispetto a SGD ``puro'', in genere converge più rapidamente con meno iperparametri da tarare.
+\end{itemize}
+
+\subsection{Epoche: 150 \;\;\; Batch size: 256 \;\;\; Validation split: 0.1}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item 150 epoche consentono di raggiungere una convergenza stabile monitorando le curve di validazione: il valore è scelto per lasciare margine oltre la fase di assestamento senza richiedere procedure aggiuntive (es. early stopping);
+  \item batch size 256 è un compromesso tra stabilità del gradiente (batch più grandi) ed effetto regolarizzante del rumore (batch più piccoli), mantenendo efficienza computazionale;
+  \item validation split 0.1 fornisce un set interno sufficiente per diagnosticare overfitting senza sottrarre troppi dati al training.
+\end{itemize}
+
+\section{Gestione dello sbilanciamento}
+Lo sbilanciamento di classe richiede tecniche specifiche per evitare che la rete converga verso una soluzione ``comoda'' che predice prevalentemente la classe maggioritaria.
+Sono stati sperimentati tre approcci: undersampling, class weights e focal loss.
+
+\subsection{Undersampling + class balancing}
+\subsubsection{Costruzione del dataset bilanciato}
+Si seleziona casualmente dalla classe maggioritaria un numero di esempi pari a quelli della classe minoritaria, ottenendo una distribuzione 50/50.
+\textbf{Parametri e scelte:}
+\begin{itemize}
+  \item campionamento \emph{senza rimpiazzo}: evita duplicazioni della classe maggioritaria e mantiene diversità;
+  \item shuffle degli indici: evita bias dovuto all'ordine dei campioni;
+  \item nuovo split train/test 70/30 con \texttt{stratify} sul dataset bilanciato: preserva il bilanciamento anche nelle partizioni.
+\end{itemize}
+\textbf{Giustificazione:} il bilanciamento ``a monte'' rende il segnale della classe positiva più presente durante il training, tipicamente aumentando il recall della classe positiva.
+Lo svantaggio principale è la perdita di informazione (molti esempi della classe maggioritaria non vengono usati).
+
+\subsubsection{Architettura ridotta sul dataset bilanciato}
+Sul dataset ridotto si usa una rete meno capiente:
+\begin{center}
+\texttt{Input (21)} $\rightarrow$ \texttt{Dense(64, ReLU)} $\rightarrow$ \texttt{Dropout(0.5)} \\
+$\rightarrow$ \texttt{Dense(32, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(16, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(1, Sigmoid)}
+\end{center}
+\textbf{Giustificazione dei parametri:}
+\begin{itemize}
+  \item neuroni dimezzati (64--32--16): dataset più piccolo $\Rightarrow$ maggior rischio di overfitting $\Rightarrow$ capacità ridotta;
+  \item dropout 0.5 nel primo layer: regolarizzazione più forte dove il numero di connessioni è più alto;
+  \item batch size 128 (ridotto) ed epoche 100 (ridotte): su dataset più piccolo si preferiscono aggiornamenti più frequenti e un training meno lungo per limitare overfitting.
+\end{itemize}
+
+\subsection{Class Weights sul dataset originale}
+\subsubsection{Idea}
+Si mantiene l'intero dataset ma si modifica la loss dando un peso maggiore agli errori sulla classe minoritaria (positiva).
+In pratica, durante il training, ogni esempio contribuisce alla loss con un fattore dipendente dalla sua classe.
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item non si perdono campioni (a differenza dell'undersampling);
+  \item si indirizza l'ottimizzazione verso un compromesso che penalizza maggiormente i falsi negativi;
+  \item i pesi ``balanced'' dipendono dalla frequenza delle classi nel training set, evitando scelte arbitrarie.
+\end{itemize}
+
+\subsubsection{Architettura}
+L'architettura resta quella della baseline (128--64--32, dropout 0.3), per isolare l'effetto dei class weights.
+\textbf{Giustificazione:} mantenendo architettura e principali iperparametri invariati, le differenze in performance si attribuiscono più chiaramente alla sola strategia di pesatura delle classi.
+
+\subsection{Focal Loss sul dataset originale}
+\subsubsection{Motivazione}
+La focal loss è progettata per problemi sbilanciati: riduce l'impatto degli esempi ``facili'' (correttamente classificati con alta confidenza) e concentra l'apprendimento sugli esempi difficili.
+
+\subsubsection{Definizione (caso binario)}
+Indicando con $p_t$ la probabilità del ``vero'' label:
+\begin{equation}
+ p_t = \begin{cases}
+ \hat{p} & \text{se } y=1,\\
+ 1-\hat{p} & \text{se } y=0,
+ \end{cases}
+\end{equation}
+la focal loss è:
+\begin{equation}
+\mathcal{L}_{FL}(y,\hat{p}) = -\alpha_t (1-p_t)^\gamma \log(p_t),
+\end{equation}
+con:
+\begin{equation}
+\alpha_t = \begin{cases}
+ \alpha & \text{se } y=1,\\
+ 1-\alpha & \text{se } y=0.
+ \end{cases}
+\end{equation}
+\textbf{Parametri scelti:}
+\begin{itemize}
+  \item $\gamma=2$: valore standard in letteratura, aumenta la focalizzazione sugli esempi difficili senza rendere l'ottimizzazione eccessivamente instabile;
+  \item $\alpha$ calcolato dai dati come frequenza della classe negativa nel training set, $\alpha = \frac{n_0}{n_0+n_1}$.
+\end{itemize}
+\textbf{Giustificazione di $\alpha$:}
+\begin{itemize}
+  \item dato che la classe positiva (1) è minoritaria, assegnare $\alpha$ grande alla classe positiva (tramite $\alpha_t$) equivale a pesare di più gli errori sui positivi;
+  \item calcolare $\alpha$ dalla distribuzione osservata evita un tuning manuale arbitrario e rende il setup replicabile.
+\end{itemize}
+\textbf{Nota operativa:} la focal loss introduce un costo computazionale maggiore rispetto a BCE/class weights e può richiedere più attenzione nel tuning; per questo motivo viene considerata principalmente come baseline di confronto.
+
+\section{Confronto PCA vs No PCA nelle reti neurali}
+Poiché la PCA non produce una riduzione drastica (serve un numero elevato di componenti per raggiungere l'80\% di varianza), viene usata come pipeline alternativa per confronto.
+
+\subsection{Rete con input PCA e class weights}
+Con input ridotto a $n_{comp}$ componenti, si adotta una rete più piccola:
+\begin{center}
+\texttt{Input ($n_{comp}$)} $\rightarrow$ \texttt{Dense(32, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(16, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(8, ReLU)} $\rightarrow$ \texttt{Dropout(0.3)} \\
+$\rightarrow$ \texttt{Dense(1, Sigmoid)}
+\end{center}
+\textbf{Giustificazione:}
+\begin{itemize}
+  \item dimensionalità di input minore $\Rightarrow$ minore necessità di capacità del modello;
+  \item architettura ridotta limita il rischio di overfitting e mantiene tempi di training comparabili;
+  \item class weights restano utili per gestire lo sbilanciamento anche nello spazio PCA.
+\end{itemize}
+
+\subsection{Focal loss su input PCA}
+Analogamente, la focal loss può essere applicata con gli stessi parametri $\gamma$ e $\alpha$ calcolato dalla distribuzione nel training set PCA.
+\textbf{Giustificazione:} mantiene coerenza sperimentale e permette di valutare se la trasformazione PCA renda più/meno utili tecniche focalizzate sugli esempi difficili.
+
+\section{Sintesi delle scelte}
+\begin{itemize}
+  \item \textbf{MLP fully-connected}: adatta a feature tabulari (indicatori di salute) e baseline solida.
+  \item \textbf{ReLU + Dropout}: buon compromesso tra capacità e regolarizzazione.
+  \item \textbf{Adam + BCE}: setup standard, stabile e replicabile.
+  \item \textbf{Sbilanciamento}: confrontati undersampling (semplice ma informazione persa), class weights (usa tutti i dati), focal loss (focalizza sugli esempi difficili, più costosa).
+  \item \textbf{PCA}: usata solo per confronto, con architetture coerentemente ridotte e stesse logiche di gestione dello sbilanciamento.
+\end{itemize}
