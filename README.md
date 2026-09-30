@@ -65,9 +65,9 @@ The study utilizes the **Cardiovascular Disease Dataset** (comprising 70,000 pat
 ### 1. Data Cleaning & Outlier Removal
 Raw medical data frequently contains erroneous measurements. Physiological constraints and statistical filtering were applied:
 - **Blood Pressure Boundaries**: Restricted to clinically plausible human ranges:
-  - Systolic blood pressure: $50 < \text{ap\_hi} \le 250\text{ mmHg}$
-  - Diastolic blood pressure: $30 < \text{ap\_lo} \le 200\text{ mmHg}$
-  - Physiological consistency: $\text{ap\_hi} > \text{ap\_lo}$
+  - Systolic blood pressure: $`50 < \text{ap\_hi} \le 250\text{ mmHg}`$
+  - Diastolic blood pressure: $`30 < \text{ap\_lo} \le 200\text{ mmHg}`$
+  - Physiological consistency: $`\text{ap\_hi} > \text{ap\_lo}`$
 - **Height & Weight Boundaries**: Removed extreme statistical outliers outside the 2.5% and 97.5% quantiles.
 - **Dataset Size**: Reduced from **70,000** to **62,703** high-confidence patient samples (~10.4% outlier removal).
 
